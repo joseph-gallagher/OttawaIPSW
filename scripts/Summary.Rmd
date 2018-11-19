@@ -50,13 +50,13 @@ First, we will identify a small number of types of days as "standard days", or "
 library(readxl)
 library(dplyr)
 
-f1 <- read_excel("WiFi/Floor1.xlsx", sheet = 1)
-f2 <- read_excel("WiFi/Floor2.xlsx", sheet = 1)
-f3 <- read_excel("WiFi/Floor3.xlsx", sheet = 1)
-f4 <- read_excel("WiFi/Floor4.xlsx", sheet = 1)
-f5 <- read_excel("WiFi/Floor5.xlsx", sheet = 1)
-f6 <- read_excel("WiFi/Floor6.xlsx", sheet = 1)
-f7 <- read_excel("WiFi/Floor7.xlsx", sheet = 1)
+f1 <- read_excel("data/WiFi/Floor1.xlsx", sheet = 1)
+f2 <- read_excel("data/WiFi/Floor2.xlsx", sheet = 1)
+f3 <- read_excel("data/WiFi/Floor3.xlsx", sheet = 1)
+f4 <- read_excel("data/WiFi/Floor4.xlsx", sheet = 1)
+f5 <- read_excel("data/WiFi/Floor5.xlsx", sheet = 1)
+f6 <- read_excel("data/WiFi/Floor6.xlsx", sheet = 1)
+f7 <- read_excel("data/WiFi/Floor7.xlsx", sheet = 1)
 
 split_days <- function(floor){
   

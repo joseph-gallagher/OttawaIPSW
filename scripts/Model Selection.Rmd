@@ -18,11 +18,11 @@ each at various levels of granularity, combine to produce linear models for occu
 library(readxl)
 library(dplyr)
 
-fifth_floor <- read_excel("DataWithGroundtruth.xlsx",
+fifth_floor <- read_excel("data/DataWithGroundtruth.xlsx",
                           sheet = 1)
-sixth_floor <- read_excel("DataWithGroundtruth.xlsx",
+sixth_floor <- read_excel("data/DataWithGroundtruth.xlsx",
                          sheet = 2)
-seventh_floor <- read_excel("DataWithGroundtruth.xlsx",
+seventh_floor <- read_excel("data/DataWithGroundtruth.xlsx",
                            sheet = 3)
 ```
 
