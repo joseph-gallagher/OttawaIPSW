@@ -1,0 +1,241 @@
+---
+title: "Summary"
+author: "Joe Gallagher"
+date: "November 16, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+Predicting building occupancy is an essential part of efficient building maintenance. By analyzing sensor data in a smart building and using clustering techniques, we decrease the average error in occupancy prediction 30 percent from a baseline model.
+
+## Abstract
+
+The International Energy Agency has calculated that there is an opportunity for up to 1.9 percent energy savings anually on average in Canada through 2050. Furthermore, the greatest potential for energy savings as identified lies in the building sector. Efficent use of buildings requires accurate building occupancy knowledge, which with the advent of ever more sophisticated buildings containing diverse data-gathering sensors, should be available.
+
+This analysis, performed as part of the Industrial Problem Solving Workshop held at the University of Ottawa, aims to answer two simple questions that may serve as a starting point for deeper study of predicting building occupancy from building sensor data. First: what type of sensors in a modern building correlate the best with building occupancy? Knowing this will allow us to better plan the allocation of resources for sensor deployment in new construction, at least as far as it pertains to assessing building occupancy. Secondly: how well can we forecast building occupancy for the remainder of a day given sensor data up until a threshold time?
+
+By considering data collected at Carleton University, we can answer with confidence that sensors which count WiFi enabled devices serve by far as the best proxy for building occupancy counts. Using WiFi data collected over a period of months as a proxy for groundtruth building occupancy, we find that there are certain typical day types which account for much of the variation in occupancy. Moreover, we find that it is possible to predict with reasonable accuracy early in the day which type the given day will be. With this, we offer a parsimonious model for predicting subsequent building occupancy that improves over a simple average model by a factor of 30 percent.
+
+The author would like to thank the researchers Araz Ashouri of the National Research Council Canada and Burak Gunay of Carleton University for their time and enthusiasm in sponsoring the problem, and the University of Ottawa along with the Fields Institute for providing financial support.
+
+## Data Used
+
+From an academic office building in Ottawa, Canada, the following sensor data, recorded at 5 minute increments, was made available:
+
+* WiFi device counts per access point (8 access points) (~90 days)
+* CO_2 concentration data from over 30 pts (~90 days)
+* Motion detector data from over 30 pts (~90 days)
+* Light power meter for each floor (~90 days)
+* Plug load meter for each floor (~90 days)
+* Ground-truth people counts (~10 days)
+
+## What is (are) the best sensor(s)?
+
+Recall that our first question was simply about the relative efficacy of the various sensor types in terms of correlating with groundtruth. Of the data available, simple reasoning would suggest that in an academic building, most occupants would be engaged in some way or another with a WiFi enabled device. Thus we would expect WiFi data to correlate closely with occupancy. Indeed, we find that across all floors, groundtruth correlates strongly with WiFi. To determine what (if any) additional variables may be useful in determining occupancy, we employ a series of ANOVA tests comparing the nested linear models (groundtruth ~ WiFi) and (groundtruth ~ WiFi + x), for some additional variable x. Since we will be considering multiple p-values, we will use the Bonferroni correction to ensure we do not overestimate the efficacy of additional variables. 
+
+The result of the ANOVA tests of the three sets of nested models shows, if we limit consideration to linear predictors, only WiFi carries significance.
+
+## Predicting future WiFi usage
+
+Our goal in this section will be to predict the rest of a day's occupancy from observed behavior up to a decision threshold; for our purposes, we will observe starting at 6 A.M. and predict the rest of the day at 10:30 A.M. As there is relatively little groundtruth data (~10 days) to work with here, instead we will answer the same question but with WiFi usage replacing occupancy. Since we model occupancy linearly as a function of WiFi use, it will be easy to transfer the results we obtain back to occupancy.
+
+First, we will identify a small number of types of days as "standard days", or "day types". We accomplish this by $k$-means clustering. Using an "elbow plot" heuristic, we determine that clustering with 3 cluster centers seems to give good results across all floors. As a sanity check, let us see a calendar of days labeled by cluster, to see if at least the very basic weekday/weekend paradigm is discovered:
+
+```{r, echo=FALSE, message=FALSE}
+library(readxl)
+library(dplyr)
+
+f1 <- read_excel("WiFi/Floor1.xlsx", sheet = 1)
+f2 <- read_excel("WiFi/Floor2.xlsx", sheet = 1)
+f3 <- read_excel("WiFi/Floor3.xlsx", sheet = 1)
+f4 <- read_excel("WiFi/Floor4.xlsx", sheet = 1)
+f5 <- read_excel("WiFi/Floor5.xlsx", sheet = 1)
+f6 <- read_excel("WiFi/Floor6.xlsx", sheet = 1)
+f7 <- read_excel("WiFi/Floor7.xlsx", sheet = 1)
+
+split_days <- function(floor){
+  
+  #Rename the first index to be time:
+  names(floor)[1] <- c("Time")
+  
+  #Sum the sensors and extract just this information:
+  floor <- data.frame("Time" = floor$Time,
+                      "sum" = rowSums(select(floor, -Time)))
+  
+  #Find the indexes where the new days start
+  new_days <- c(1)
+  day_names <- c("01-23")
+  
+  days <- format(floor$Time, "%d")
+  months <- format(floor$Time, "%m")
+  for(i in 1:(nrow(floor)-1)){
+    
+    current_slice_day = days[i]
+    next_slice_day = days[i+1]
+    
+    if(current_slice_day != next_slice_day){
+      new_days <- append(new_days, i+1)
+      day_names <- append(day_names, 
+                          paste0(months[i+1], "-", days[i+1]))
+    }
+    
+  }
+  
+  #Make a list of vectors by extracting the relevant chunks
+  time_slices <- format(floor$Time, "%H:%M:%S")
+  day_profiles <- data.frame()
+  
+  for(i in 1:(length(new_days)-2)){
+    start = new_days[i]
+    end = new_days[i+1]-1
+    day_profiles <- rbind(day_profiles, name = floor$sum[start:end])
+  }
+  
+  #Rename the rows and columns
+  names(day_profiles) <- time_slices[1:287]
+  row.names(day_profiles) <- day_names[1:119]
+  
+  #Return cleaned data
+  day_profiles
+  
+}
+
+f1_pr <- split_days(f1)
+f2_pr <- split_days(f2)
+f3_pr <- split_days(f3)
+f4_pr <- split_days(f4)
+f5_pr <- split_days(f5)
+f6_pr <- split_days(f6)
+f7_pr <- split_days(f7)
+set.seed(77)
+c_f1 <- kmeans(f1_pr, centers=3)
+c_f2 <- kmeans(f2_pr, centers=3)
+c_f3 <- kmeans(f3_pr, centers=3)
+c_f4 <- kmeans(f4_pr, centers=3)
+c_f5 <- kmeans(f5_pr, centers=3)
+c_f6 <- kmeans(f6_pr, centers=3)
+c_f7 <- kmeans(f7_pr, centers=3)
+```
+
+```{r, echo=FALSE}
+library(ggcal)
+library(ggplot2)
+mydate <- seq(as.Date("2018-01-23"), as.Date("2018-05-21"), by="1 day")
+myfills <- ifelse(c_f1$cluster == 1, 'Cluster 1', ifelse(c_f1$cluster == 2, 'Cluster 2', 'Cluster 3'))
+
+ggcal(mydate, myfills) + scale_fill_manual(values=c("Cluster 1"="#00AFBB", "Cluster 2"="#E7B800", "Cluster 3"="#FC4E07"))
+```
+
+We see, in fact, that Cluster 3 seems to represent a weekend paradigm. Does this align with the available academic calendar of Carleton University over this time span? Unsuprisingly, yes; our clusters independently discovered the existence of Winter Break (February 19-23) as well as the presence of a statutory holiday on March 30th. They also seem to discover that the last day of classes lies on April 11th. 
+
+Thus we see that we could suggestively name Cluster 1 'typical weekdays', Cluster 2 'atypical weekdays' and Cluster 3 'weekends/vacation'. To appreciate the type of WiFi use on a prototypical day of each of these types, we include just that below:
+
+```{r, echo=FALSE}
+library(hms)
+library(tidyr)
+
+df <- data.frame("Time"=names(f1_pr), 
+                 "Typical Weekday" = c_f1$centers[1,], 
+                 "Atypical Weekday" = c_f1$centers[2,], 
+                 "Weekend"=c_f1$centers[3,])
+df$Time <- parse_hms(df$Time)
+
+df <- df %>%
+  gather(key = "Type", value = "wifi_devices", -Time)
+
+ggplot(df, aes(x = Time, y = wifi_devices)) + 
+  geom_line(aes(color = Type), size = 1) +
+  labs(x = "Time", y = "Wifi Enabled Devices", 
+       title = "Floor 1", day_type = "Day Type" ) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800", "#FC4E07")) +
+  theme_minimal()
+```
+
+Note the choice of the threshold of 10:30 A.M. as a decision window is explained by the profiles above: It represents the first point at which the typical/atypical weekday paradigms, on average, diverge. It is also substantiated by a graph which requires some setup to describe.
+
+Consider a baseline predictive model which waits until 6:00 + t A.M., then simply predicts WiFi use at all subsequent 5-minute intervals by taking the average of historic WiFi counts over all days at that interval. Contrast this with a model which first predicts a day type for the day, based on observed data, then for each subsequent 5-minute interval averages over only days of same type. Surely this is a refined version of the baseline, but is it effective? Below, we see how root mean squared error of our predictions change as we change the time when we predict. The pronounced elbow around 10:00 A.M. offers substantiating proof that, weighed against the importance of predicting early for building maintenance, somewhere around 10:00 A.M. should be the time chosen to make predictions.
+
+```{r, echo=FALSE}
+predict_type <- function(day,centers,t){
+  
+  #Take the slice from 6:00 onwards
+  day_slice <- day[72:(72+t)]
+  
+  #Measure the distance from each slice to the corresponding 
+  #slice of the clusters
+  d <- c()
+  for(i in 1:nrow(centers)){
+    d <- append(d, dist(rbind(centers[i,][72:(72+t)], day_slice)))
+  }
+  which.min(d)
+}
+
+#Takes a list of data, e.g. list(f1_pr, f2_pr) and a list of clusters, e.g. list(c_f1, c_f2)
+#so that accuracies may vary over time. 
+improve_real <- function(data, clustering, t){
+  
+  centers <- clustering$centers
+  
+  preds <- apply(data, 1, predict_type, 
+        centers = clustering$centers,
+        t = t)
+  
+  dt <- cbind(data, preds)
+  
+  error <- apply(dt, 1, function(x){sum((x[1:(length(x)-1)] - centers[x[length(x)],])^2) }  )
+  
+  w_clust <- sqrt(sum(error)/(nrow(data)*ncol(data)))
+  no_clust <- sqrt(clustering$totss/(nrow(data)*ncol(data)))
+  
+  result <- c(w_clust, no_clust)
+  
+  
+}
+
+plot_error <- function(data, clustering){
+  
+  error <- c()
+  times <- parse_hms(names(data[[1]])[72:181])
+  
+  #Calculate the equivalent of b[1] for a given t and add it to the errors
+  for(i in 1:110){
+    
+    a <- c()
+    
+    for(j in 1:length(data)){
+      a_new <- improve_real(data[[j]], clustering[[j]], i)[1]/max(data[[j]])
+      a <- append(a, a_new)
+    }
+    
+    error <- append(error, mean(a))
+  }
+  
+  dt <- data.frame("Time" = times, "Error" = error*100)
+  dt
+}
+
+
+dat <- list(f1_pr, f2_pr, f3_pr, f4_pr, f5_pr, f6_pr, f7_pr)
+clu <- list(c_f1, c_f2, c_f3, c_f4, c_f5, c_f6, c_f7)
+
+dt <- plot_error(dat,clu)
+
+x_0 = dt$Time[95]
+
+gg <- ggplot(data = dt, aes(x = Time, y = Error))+
+    geom_line(color = "#00AFBB", size = 2)+
+    geom_hline(yintercept = 11.46, col="black")+
+    annotate("text", x = x_0, y = 12, label = "No Matching")+
+    labs(y = "Mean Measurement Error (% of capacity)",
+         x = "Time at Matching")+
+    theme_minimal()
+
+print(gg)
+```
+
+Comparing over all floors, we see that by only waiting until 10:30 A.M., we go from having a mean error in WiFi usage prediction of 11.5 percent of total occupancy to only 8 percent - an improvement of more than 30 percent!

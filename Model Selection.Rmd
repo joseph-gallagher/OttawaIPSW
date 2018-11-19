@@ -1,0 +1,127 @@
+---
+title: "Model Analysis"
+author: "Joe Gallagher"
+date: "May 29, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Sensor Type Selection
+
+We want to see how various combinations of sensor types, 
+each at various levels of granularity, combine to produce linear models for occupancy. First, read in the data:
+
+```{r, message=FALSE}
+library(readxl)
+library(dplyr)
+
+fifth_floor <- read_excel("DataWithGroundtruth.xlsx",
+                          sheet = 1)
+sixth_floor <- read_excel("DataWithGroundtruth.xlsx",
+                         sheet = 2)
+seventh_floor <- read_excel("DataWithGroundtruth.xlsx",
+                           sheet = 3)
+```
+
+The simplest way of using a sensor type as a predictor is to use a total summary statistic of it: this would be at the most granular level. We build some models this way:
+
+```{r}
+simple <- function(floor){
+  
+  #Get the floor's various sensor readings
+  floor_wifi <- dplyr::select(floor, contains("AP"))
+  floor_md <- dplyr::select(floor, contains("MD"))
+  floor_CO2 <- dplyr::select(floor, contains("CO2"))
+  floor_power <- dplyr::select(floor, contains("Power"))
+  
+  #Compute summary statistics for each sensor and
+  #collect into a data frame
+  sum_wifi <- rowSums(floor_wifi)
+  sum_md <- rowSums(floor_md)
+  sum_CO2 <- rowSums(floor_CO2)
+  sum_power <- rowSums(floor_power)
+  
+  floor_summary <- cbind.data.frame("wifi" = sum_wifi,
+                                    "power" = sum_power,
+                                    "CO2" = sum_CO2,
+                                    "md" = sum_md,
+                                    "Groundtruth" = floor$Groundtruth)
+  floor_summary <- na.omit(floor_summary)
+  floor_summary
+  
+}
+
+fifth_data <- simple(fifth_floor)
+sixth_data <- simple(sixth_floor)
+seventh_data <- simple(seventh_floor)
+```
+
+```{r}
+fifth_wifi_model <- lm(Groundtruth ~ wifi, data = fifth_data)
+fifth_plus_power <- lm(Groundtruth ~ wifi + power, data = fifth_data)
+fifth_plus_md <- lm(Groundtruth ~ wifi + md, data = fifth_data)
+fifth_plus_CO2 <- lm(Groundtruth ~ wifi + CO2, data = fifth_data)
+
+anova(fifth_wifi_model, fifth_plus_power)
+anova(fifth_wifi_model, fifth_plus_md)
+anova(fifth_wifi_model, fifth_plus_CO2)
+```
+
+This seems to suggest that WiFi and power together offer significant information, whereas the other variables do not. We can ask: does this persist in other floors?
+
+```{r}
+sixth_data <- simple(sixth_floor)
+sixth_simple_model <- lm(Groundtruth ~ . ,
+                         data = sixth_data)
+
+anova(sixth_simple_model)
+
+seventh_data <- simple(seventh_floor)
+seventh_simple_model <- lm(Groundtruth ~ .,
+                           data = seventh_data)
+
+anova(seventh_simple_model)
+
+```
+
+The answer, as we see above, is mixed. It is true that WiFi persists to be a good predictor on every floor. On the other hand, however, for the sixth and seventh floor we see power is much less of a helpful predictor. On the sixth floor, CO2 is the second most useful predictor; on the seventh, the total motion detected is the most useful.
+
+What is constant across all cases is that accounting for WiFi diminishes the sum of squared error drastically. But how drastically? How effective are the models which do not contain wifi on each floor?
+
+```{r}
+fifth_no_wifi <- lm(Groundtruth ~ power + CO2 + md,
+                    data = fifth_data)
+
+sixth_no_wifi <- lm(Groundtruth ~ power + CO2 + md,
+                    data = sixth_data)
+
+seventh_no_wifi <- lm(Groundtruth ~ power + CO2 + md,
+                      data = seventh_data)
+
+msq <- function(model){
+  sqrt(sum(model$residuals^2)/model$df.residual)
+}
+
+a1 <- msq(fifth_no_wifi)/max(na.omit(fifth_floor$Groundtruth))
+x1 <- msq(fifth_simple_model)/max(na.omit(fifth_floor$Groundtruth))
+
+a2 <- msq(sixth_no_wifi)/max(na.omit(sixth_floor$Groundtruth))
+x2 <- msq(sixth_simple_model)/max(na.omit(sixth_floor$Groundtruth))
+
+a3 <- msq(seventh_no_wifi)/max(na.omit(seventh_floor$Groundtruth))
+x3 <- msq(seventh_simple_model)/max(na.omit(seventh_floor$Groundtruth))
+
+mean(c(x1,x2,x3))
+mean(c(a1,a2,a3))
+
+
+
+
+
+```
+
+
+## Risk assesment in extrapolation

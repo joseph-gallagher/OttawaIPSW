@@ -1,0 +1,378 @@
+---
+title: "Day Type Prediction"
+author: "Joe Gallagher"
+date: "May 30, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Consumption of WiFi seems emperically to serve as a good proxy for building occupancy in a particular building on Carleton University's campus. To best understand building occupancy, then, it would be useful to determine what kind of WiFi consumption will occur in the future. 
+
+## Data Import/Cleaning
+
+Here, we load in all the relevant packages and bring in our data.
+We also rearrange it so that it can be easily clustered.
+```{r, echo=FALSE, message=FALSE}
+library(readxl)
+library(dplyr)
+
+f1 <- read_excel("WiFi/Floor1.xlsx", sheet = 1)
+f2 <- read_excel("WiFi/Floor2.xlsx", sheet = 1)
+f3 <- read_excel("WiFi/Floor3.xlsx", sheet = 1)
+f4 <- read_excel("WiFi/Floor4.xlsx", sheet = 1)
+f5 <- read_excel("WiFi/Floor5.xlsx", sheet = 1)
+f6 <- read_excel("WiFi/Floor6.xlsx", sheet = 1)
+f7 <- read_excel("WiFi/Floor7.xlsx", sheet = 1)
+
+split_days <- function(floor){
+  
+  #Rename the first index to be time:
+  names(floor)[1] <- c("Time")
+  
+  #Sum the sensors and extract just this information:
+  floor <- data.frame("Time" = floor$Time,
+                      "sum" = rowSums(select(floor, -Time)))
+  
+  #Find the indexes where the new days start
+  new_days <- c(1)
+  day_names <- c("01-23")
+  
+  days <- format(floor$Time, "%d")
+  months <- format(floor$Time, "%m")
+  for(i in 1:(nrow(floor)-1)){
+    
+    current_slice_day = days[i]
+    next_slice_day = days[i+1]
+    
+    if(current_slice_day != next_slice_day){
+      new_days <- append(new_days, i+1)
+      day_names <- append(day_names, 
+                          paste0(months[i+1], "-", days[i+1]))
+    }
+    
+  }
+  
+  #Make a list of vectors by extracting the relevant chunks
+  time_slices <- format(floor$Time, "%H:%M:%S")
+  day_profiles <- data.frame()
+  
+  for(i in 1:(length(new_days)-2)){
+    start = new_days[i]
+    end = new_days[i+1]-1
+    day_profiles <- rbind(day_profiles, name = floor$sum[start:end])
+  }
+  
+  #Rename the rows and columns
+  names(day_profiles) <- time_slices[1:287]
+  row.names(day_profiles) <- day_names[1:119]
+  
+  #Return cleaned data
+  day_profiles
+  
+}
+
+f1_pr <- split_days(f1)
+f2_pr <- split_days(f2)
+f3_pr <- split_days(f3)
+f4_pr <- split_days(f4)
+f5_pr <- split_days(f5)
+f6_pr <- split_days(f6)
+f7_pr <- split_days(f7)
+
+```
+
+
+## Clustering and Preliminary Analysis
+
+Here, we include some functions which will be useful for us in exploring different clustering strategies. Let's first generate 
+elbow plots for each of the floors to see how they would like to be
+clustered:
+
+```{r, echo = FALSE}
+
+elbow_plot <- function(data, m){
+  
+  ssq <- c()
+  for(i in 2:m){
+    cc <- kmeans(data, centers=i)
+    ssq <- append(ssq, cc$tot.withinss)
+  }
+  plot(ssq, type = "l", xlab = "Clusters", 
+       ylab = "Total Inter-Cluster Residual")
+}
+
+```
+Let's make some plots:
+
+Tweaks to make:
+* Color?
+```{r}
+par(mfrow = c(2,2))
+elbow_plot(f1_pr, 10)
+elbow_plot(f2_pr, 10)
+elbow_plot(f3_pr, 10)
+elbow_plot(f4_pr, 10)
+```
+
+These seem to suggest that, generally, clustering in k < 5 groups is preferable for these floors. For now, let us focus on the first floor as a test case. It has a pronounced elbow at k = 3, so we will cluster it with 3 clusters:
+
+```{r}
+set.seed(77)
+c_f1 <- kmeans(f1_pr, centers=3)
+```
+
+The centers of these clusters represent "typical" day types. Let us see what these look like.
+
+```{r}
+library(hms)
+library(tidyr)
+library(ggplot2)
+
+df <- data.frame("Time"=names(f1_pr), 
+                 "Typical Weekday" = c_f1$centers[1,], 
+                 "Atypical Weekday" = c_f1$centers[2,], 
+                 "Weekend"=c_f1$centers[3,])
+df$Time <- parse_hms(df$Time)
+
+df <- df %>%
+  gather(key = "Type", value = "wifi_devices", -Time)
+
+ggplot(df, aes(x = Time, y = wifi_devices)) + 
+  geom_line(aes(color = Type), size = 1) +
+  labs(x = "Time", y = "Wifi Enabled Devices", 
+       title = "Floor 1", day_type = "Day Type" ) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800", "#FC4E07")) +
+  theme_minimal()
+```
+We include some code which will be useful for what follows:
+
+```{r, echo = FALSE}
+predict_type <- function(day,centers,t){
+  
+  #Take the slice from 6:00 onwards
+  day_slice <- day[72:(72+t)]
+  
+  #Measure the distance from each slice to the corresponding 
+  #slice of the clusters
+  d <- c()
+  for(i in 1:nrow(centers)){
+    d <- append(d, dist(rbind(centers[i,][72:(72+t)], day_slice)))
+  }
+  which.min(d)
+}
+
+slice_accuracy <- function(data, clustering, t){
+  
+  preds <- apply(data, 1, predict_type, 
+        centers = clustering$centers,
+        t = t)
+  
+  acc <- sum(preds == clustering$cluster)/length(preds)
+  
+  acc
+  
+}
+
+plot_time_acc <- function(data, clustering, title){
+  
+  acc <- c()
+  for(t in 1:110){
+    acc_now <- slice_accuracy(data, clustering, t)
+    acc <- append(acc, acc_now)
+  }
+  
+  times <- parse_hms(names(data)[72:181])
+  df <- data.frame("Time" = times, "Accuracy" = acc)
+  
+  gg <- ggplot(data = df, aes(x = Time, y = Accuracy))+
+    geom_line(color = "#00AFBB", size = 2)+
+    labs(title = title) + 
+    geom_hline(yintercept=0.8, linetype="dashed", color = "red") +
+    theme_minimal()
+  
+  print(gg)
+  
+}
+```
+Let's see how well we do predicting the cluster as a function
+of what time we wait until deciding:
+
+```{r}
+
+plot_time_acc(f1_pr, c_f1, title = "Floor 1")
+
+
+```
+
+It seems that we are able to guess around 80% accurately what type of day we will have once we have observed data through 10:30 AM. How much would using this binning information to predict future occupancy change our average error in person-count versus a baseline of simply
+predicting an average day?
+
+```{r, echo=FALSE}
+#If the day carries its cluster, we can compute
+avg_to_wrong_clust <- function(day, center){
+  
+  cor_clust <- day["cluster"]
+  d <- c()
+  just_day <- day[1:(length(day)-1)]
+  for(i in 1:nrow(center)){
+    
+    if(i != cor_clust){
+      d <- append(d, dist(rbind(center[i,],just_day))^2)
+    }
+    
+  }
+  mean(d)
+}
+
+
+
+#How much do we expect to improve accuracy by binning?
+improve <- function(data, clustering, t){
+  
+  #Find the average error in prediction w/o clustering:
+  no_clust <- sqrt(clustering$totss/(nrow(data)*ncol(data)))
+  
+  #Find the accuracy with clustering, predicting at time t:
+  acc <- slice_accuracy(data, clustering, t)
+  error_bin_correct <- sqrt(clustering$tot.withinss/(nrow(data)*ncol(data)))
+  
+  dt <- cbind(data, "cluster" = clustering$cluster)
+  error_bin_wrong <- sqrt(sum(apply(dt, 1, 
+                                    avg_to_wrong_clust,
+                                    clustering$centers))/(nrow(data)*ncol(data)))
+  
+  w_clust <- acc*error_bin_correct+(1-acc)*error_bin_wrong
+  
+  result <- c(w_clust,no_clust)
+  result
+    
+}
+
+#How much do we actually improve accuracy by binning?
+improve_real <- function(data, clustering, t){
+  
+  centers <- clustering$centers
+  
+  preds <- apply(data, 1, predict_type, 
+        centers = clustering$centers,
+        t = t)
+  
+  dt <- cbind(data, preds)
+  
+  error <- apply(dt, 1, function(x){sum((x[1:(length(x)-1)] - centers[x[length(x)],])^2) }  )
+  
+  w_clust <- sqrt(sum(error)/(nrow(data)*ncol(data)))
+  no_clust <- sqrt(clustering$totss/(nrow(data)*ncol(data)))
+  
+  result <- c(w_clust, no_clust)
+  
+  
+}
+```
+
+```{r}
+improve(f1_pr, c_f1, 50)/max(colMeans(f1_pr))
+improve_real(f1_pr, c_f1, 50)/max(colMeans(f1_pr))
+```
+
+Let's run a similar analysis on the other floors:
+
+```{r, echo = FALSE}
+set.seed(777)
+c_f2 <- kmeans(f2_pr, centers = 3)
+c_f3 <- kmeans(f3_pr, centers = 3)
+c_f4 <- kmeans(f4_pr, centers = 3)
+c_f5 <- kmeans(f5_pr, centers = 3)
+c_f6 <- kmeans(f6_pr, centers = 3)
+c_f7 <- kmeans(f7_pr, centers = 3)
+
+a = data.frame()
+a <- rbind(a, improve_real(f1_pr, c_f1, 50)/max(f1_pr))
+a <- rbind(a, improve_real(f2_pr, c_f2, 50)/max(f2_pr))
+a <- rbind(a, improve_real(f3_pr, c_f3, 50)/max(f3_pr))
+a <- rbind(a, improve_real(f4_pr, c_f4, 50)/max(f4_pr))
+a <- rbind(a, improve_real(f5_pr, c_f5, 50)/max(f5_pr))
+a <- rbind(a, improve_real(f6_pr, c_f6, 50)/max(f6_pr))
+a <- rbind(a, improve_real(f7_pr, c_f7, 50)/max(f7_pr))
+names(a) <- c("With Binning", "Without Binning")
+
+b = colMeans(a)
+```
+
+```{r}
+a
+b
+```
+If we wanted to, we could see how quickly we became 80% accurate on each floor:
+
+```{r}
+plot_time_acc(f2_pr, c_f2, title = "Floor 2")
+plot_time_acc(f3_pr, c_f3, title = "Floor 3")
+plot_time_acc(f4_pr, c_f4, title = "Floor 4")
+plot_time_acc(f5_pr, c_f5, title = "Floor 5")
+plot_time_acc(f6_pr, c_f6, title = "Floor 6")
+plot_time_acc(f7_pr, c_f7, title = "Floor 7")
+```
+
+But what we really want is to see is the error rate as a function of time waited to predict; 
+that is, we want to see a graph of the first entry of b as we vary t. This is easy enough to do:
+
+```{r}
+
+#Takes a list of data, e.g. list(f1_pr, f2_pr) and a list of clusters, e.g. list(c_f1, c_f2)
+#so that accuracies may vary over time. 
+plot_error <- function(data, clustering){
+  
+  error <- c()
+  times <- parse_hms(names(data[[1]])[72:181])
+  
+  #Calculate the equivalent of b[1] for a given t and add it to the errors
+  for(i in 1:110){
+    
+    a <- c()
+    
+    for(j in 1:length(data)){
+      a_new <- improve_real(data[[j]], clustering[[j]], i)[1]/max(data[[j]])
+      a <- append(a, a_new)
+    }
+    
+    error <- append(error, mean(a))
+  }
+  
+  dt <- data.frame("Time" = times, "Error" = error*100)
+  dt
+}
+
+
+```
+
+```{r}
+dat <- list(f1_pr, f2_pr, f3_pr, f4_pr, f5_pr, f6_pr, f7_pr)
+clu <- list(c_f1, c_f2, c_f3, c_f4, c_f5, c_f6, c_f7)
+
+dt <- plot_error(dat,clu)
+```
+
+```{r}
+
+x_0 = dt$Time[95]
+
+gg <- ggplot(data = dt, aes(x = Time, y = Error))+
+    geom_line(color = "#00AFBB", size = 2)+
+    geom_hline(yintercept = 11.46, col="black")+
+    annotate("text", x = x_0, y = 12, label = "No Matching")+
+    labs(y = "Mean Measurement Error (% of capacity)",
+         x = "Time at Matching")+
+    theme_minimal()
+
+print(gg)
+```
+
+```{r}
+ggsave("Images/Matching.png", )
+```
